@@ -1,0 +1,43 @@
+static void probe(String proxyHost, int proxyPort) {
+    String host = "api.edinet-fsa.go.jp";
+    long t0 = System.currentTimeMillis();
+    try (Socket sock = new Socket()) {
+        // 1) 프록시 TCP 연결
+        sock.connect(new InetSocketAddress(proxyHost, proxyPort), 5000);
+        log("1.프록시 연결 OK", t0);
+        sock.setSoTimeout(10000);
+
+        // 2) CONNECT 터널
+        sock.getOutputStream().write(("CONNECT " + host + ":443 HTTP/1.1\r\n"
+                + "Host: " + host + ":443\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        sock.getOutputStream().flush();
+        BufferedReader in = new BufferedReader(
+                new InputStreamReader(sock.getInputStream(), StandardCharsets.US_ASCII));
+        String status = in.readLine();
+        log("2.CONNECT 응답: " + status, t0);
+        String h;
+        while ((h = in.readLine()) != null && !h.isEmpty()) log("   헤더: " + h, t0);
+        if (status == null || !status.contains(" 200")) return;
+
+        // 3) TLS 핸드셰이크
+        SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault())
+                .createSocket(sock, host, 443, true);
+        ssl.startHandshake();
+        X509Certificate cert = (X509Certificate) ssl.getSession().getPeerCertificates()[0];
+        log("3.TLS OK, 발급자=" + cert.getIssuerX500Principal(), t0);
+
+        // 4~5) 요청/응답
+        ssl.getOutputStream().write(("GET /api/v2/documents.json?date=2026-09-25&type=1"
+                + "&Subscription-Key=키 HTTP/1.1\r\nHost: " + host
+                + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        ssl.getOutputStream().flush();
+        log("4.요청 전송 OK", t0);
+        log("5.응답: " + new BufferedReader(new InputStreamReader(ssl.getInputStream())).readLine(), t0);
+    } catch (Exception e) {
+        log("실패: " + e, t0);
+    }
+}
+
+static void log(String msg, long t0) {
+    System.out.println("[+" + (System.currentTimeMillis() - t0) + "ms] " + msg);
+}
